@@ -1,0 +1,203 @@
+<link rel="import" href="../polymer/polymer.html">
+<link rel="import" href="../iron-ajax/iron-ajax.html">
+<!--
+`serv-ajax`
+Service element in charge of managing a queue of ajax requests and dispatching data to the interested elements
+
+@demo demo/index.html 
+-->
+<dom-module id="serv-ajax">
+	<template>
+		<iron-ajax
+			id="ajax-element"
+			url="{{url}}"
+			method="{{method}}"
+			body="{{body}}"
+			headers="{{headers}}"
+			loading="{{loading}}"
+			timeout="{{timeout}}"
+			handle-as="json"
+			on-request="_handleRequest"
+			on-response="_handleResponse"
+			on-error="_handleError"></iron-ajax>
+	</template>
+	<script>
+	Polymer({
+
+		is: 'serv-ajax',
+
+		properties: {
+			/**
+			 * Queued request Array. Entry point for all requests received by the service
+			 * element
+			 * @type {Array}
+			 */
+			requestQueue: {
+				type: Array,
+				value: function(){
+					return [];
+				}
+			},
+
+			/**
+			 * Once a request has been passed to the iron-ajax element we register a refernce
+			 * to it in this Array
+			 * @type {Array}
+			 */
+			pendingCalls: {
+				type: Array,
+				value: function(){
+					return [];
+				}
+			},
+
+			/**
+			 * Timeout setup for the iron-ajax element (in ms)
+			 * @type {Number}
+			 */
+			timeout: {
+				type: Number,
+				value: 10000
+			}
+		},
+
+		observers: [
+			'_newRequestQueued(requestQueue.*)'
+		],
+
+		/**
+		 * Public request creation method. Expects an object with the following structure:
+		 * - url: (Required) endpoint to which the request will be made
+		 * - node: (Required) reference to the element which made the call. Usually will be `this`
+		 * - method: (Optional) GET by default. Accepts: GET, PUT, POST, DELETE
+		 * - body: (Optional) Request body to be sent to the server. All requests will be sent with 'Content-Type' = 'application/json'!!!
+		 * - token: (Optional) If the request is private, the token will be sent as 'x-access-token' request Header
+		 *
+		 * ALL OBJECT KEY-VALUES ARE TO BE PASSED IN AS STRINGS
+		 * 
+		 * @param  {Object} data Request data object
+		 */
+		request(data) {
+			let newReq = {};
+			if (data && data instanceof Object) {
+				try {
+					if(!data.url ){
+						throw new Error('A URL endpoint must be specified');
+					}
+					if(!data.node ){
+						throw new Error('A Node Caller must be specified');
+					}
+					newReq = {
+						url: data.url,
+						method: data.method || 'GET',
+						body: (data.method !== 'GET') ? data.body : null,
+						headers: {
+							"Content-Type": "application/json",
+							"x-access-token": data.token || null
+						},
+						node: data.node
+					};
+				} catch (e) {
+					console.warn('Serv-Ajax:: Your ajax request does not have the necessary fields')
+					return console.warn(e);
+				}
+
+				this.push('requestQueue', newReq);
+			}
+		},
+
+		/**
+		 * Request creation handler. Registers each request reference in `pendingCalls`
+		 * @param  {Object} req Request object
+		 */
+		_handleRequest(req) {
+			const newCall = {
+				id: req.target.url,
+				node: this.lastRequestNode
+			}
+			this.pendingCalls.push(newCall);
+		},
+
+		/**
+		 * Response handler. Finds pending request reference and invokes the petionary node
+		 * through an expected method: `_handleResponse` on the node itself
+		 * @param  {Object} res Response object
+		 */
+		_handleResponse(res){
+			const id = res.detail.url;
+			const reqData = this._getRequestData(id);
+			this.pendingCalls.splice(reqData.reqIndex, 1);
+
+			reqData.reqNode._handleResponse({
+				reqId: id,
+				data: res.detail.response,
+				status: res.detail.status
+			});
+		},
+
+		/**
+		 * Error handler. Finds pending request reference and invokes the petionary node
+		 * through an expected method: `_handleError` on the node itself
+		 * @param  {Object} e Error object
+		 */
+		_handleError(e) {
+			const id = e.detail.request.url;
+			const reqData = this._getRequestData(id);
+			this.pendingCalls.splice(reqData.reqIndex, 1);
+
+			if (e.detail.error.type === 'timeout') {
+				console.warn('Serv-ajax :: Timeout on call');
+			}
+
+			reqData.reqNode._handleError({
+				reqId: id,
+				error: e.detail.error,
+				message: e.detail.request.__data__.response.message || null,
+				status: e.detail.request.status,
+				statusText: e.detail.request.statusText
+			});
+		},
+
+		/**
+		 * Used to search the `pendingCalls` Array for a specific request
+		 * @param  {String} id String identifier which consists of: 'method'-'endpoint'
+		 * @return {Object}    Object containing request information: ArrayPosition and 
+		 * Requesting node reference
+		 */
+		_getRequestData(id) {
+			let reqIndex = 0;
+			let reqNode = null;
+			this.pendingCalls.forEach((item, index) => {
+				if(item.id === id){
+					reqIndex = index;
+					reqNode = item.node;
+				}
+			});
+
+			return {
+				reqIndex,
+				reqNode
+			};
+		},
+
+		/**
+		 * Method called by queue observer. Builds the request, generates it and dequeues
+		 * the launched request
+		 * @param  {Object} changeRecord Change Record received from observer
+		 */
+		_newRequestQueued(changeRecord) {
+			if(changeRecord.path === 'requestQueue.splices'){
+				const req = changeRecord.base[0];
+				this.url = req.url;
+				this.method = req.method;
+				this.body = req.body;
+				this.headers = req.headers;
+				this.lastRequestNode = req.node;
+
+				this.$["ajax-element"].generateRequest();
+				this.requestQueue.pop();
+			}
+		}
+	});
+	</script>
+</dom-module>
